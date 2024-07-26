@@ -24,6 +24,12 @@ _DEFAULT_FILE_NAMES = [
         'FS220R.txt','FS220S.txt','Grants.txt','TradeNames.txt'
     ]
 
+# URL Links by date range:
+# https://ncua.gov/files/publications/analysis/call-report-data-{yyyy}-{mm}.zip for June 2015 onward.
+# https://ncua.gov/files/publications/data-apps/QCR{yyyymm}.zip March 2015 and earlier.
+
+
+
 # CLI Parser
 parser = argparse.ArgumentParser(
     prog="ingest_ncua_data",
@@ -38,30 +44,27 @@ args = parser.parse_args()
 class NCUA_Ingester:
     '''Class to ingest NCUA data files into S3 bucket.'''
 
+    DOWNLOAD_URL_TEMPLATE_PRE_JUNE_2015 = 'https://ncua.gov/files/publications/data-apps/QCR{}{}.zip'
     DOWNLOAD_URL_TEMPLATE: str = 'https://ncua.gov/files/publications/analysis/call-report-data-{}-{}.zip'
     S3_BUCKET_NAME: str = 'call-reporter'
     data_file_names: list[str] = field(default_factory=lambda: _DEFAULT_FILE_NAMES)
 
     def __post_init__(self):
-        logger.info("Created NCUA_Ingester instance. DOWNLOAD_URL_TEMPLATE={DOWNLOAD_URL_TEMPLATE}. S3_BUCKET_NAME={S3_BUCKET_NAME}.")
+        logger.info("Created NCUA_Ingester instance. S3_BUCKET_NAME={S3_BUCKET_NAME}.")
 
     def ingest_quarter_data(self, data_year: int, data_month: int):
-        logger.info("Running ingest_quarter_data with data_year={data_year} and data_month={data_month}.")
-        if data_year not in range(1980,2051):
-            raise ValueError("data_year not between 1980 and 2050")
-        if data_month not in range(1,13):
-            raise ValueError("data_month not between 1 and 12")
+        url_template = self.DOWNLOAD_URL_TEMPLATE if data_year+data_month/12 >= 2015+06/12 else self.DOWNLOAD_URL_TEMPLATE_PRE_JUNE_2015
         data_year = f'{data_year:0>4}'
         data_month = f'{data_month:0>2}'
-        download_url = self.DOWNLOAD_URL_TEMPLATE.format(data_year,data_month)
+        download_url = url_template.format(data_year,data_month)
 
-        logger.debug(f'Attempting download from {download_url}')
+        logger.info(f'Attempting download from {download_url}')
         response = requests.get(download_url)
         if response.status_code != 200:
-            logger.error(f'Failed download from {download_url}. Status code: {response.status_code}.')
+            logger.info(f'Failed download from {download_url}. Status code: {response.status_code}.')
             return
         else:
-            logger.debug('Download successful.')
+            logger.info('Download successful.')
 
         temp_dir = tempfile.mkdtemp()
         logger.debug(f'temp_dir created: {temp_dir}')
@@ -75,10 +78,10 @@ class NCUA_Ingester:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         logger.debug('Zip files extracted.')
-        logger.debug(f'Here are all the files in the directory: {os.listdir(temp_dir)}')
+        # logger.debug(f'Here are all the files in the directory: {os.listdir(temp_dir)}')
         
         s3 = boto3.client('s3')
-        
+        logger.info(f'Starting file upload to S3.')
         for file in os.listdir(temp_dir):
             if file in self.data_file_names:
                 object_name = '/'.join(['ncua',data_year,data_month,file])
@@ -89,7 +92,7 @@ class NCUA_Ingester:
                 except ClientError as e:
                     logger.error(e)
                     return False
-        
+        logger.info(f'All files uploaded to S3.')
         return True
 
 
